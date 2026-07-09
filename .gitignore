@@ -1,0 +1,32 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Vector store (ChromaDB persisted data)
+chroma/
+chroma_store/
+*.chroma
+
+# Local SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Eval results (keep the folder, ignore generated output)
+eval/results/*
+!eval/results/.gitkeep
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
