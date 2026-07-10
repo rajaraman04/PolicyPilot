@@ -37,7 +37,7 @@ cp .env.example .env        # then fill in your API key(s)
 Add source PDFs to `data/`, then build the vector store:
 
 ```bash
-python -m ingest.ingest
+python -m ingest.build            # add --reset to rebuild from scratch
 ```
 
 ## Running

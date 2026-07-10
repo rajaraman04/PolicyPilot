@@ -1,25 +1,12 @@
-"""Ingest pipeline: PDFs in data/ -> chunks -> embeddings -> ChromaDB.
+"""Deprecated entry point — kept so `python -m ingest.ingest` still works.
 
-Run: python -m ingest.ingest
-
-Each chunk keeps its source metadata (document name + page) so retrieval can
-return citations.
+The real pipeline lives in ingest/build.py. Prefer `python -m ingest.build`.
 """
 
-from app.config import settings
+from ingest.build import build, main
 
-
-def ingest() -> None:
-    """Load PDFs from settings.data_dir, chunk, embed, and persist to Chroma.
-
-    TODO:
-      1. Load each PDF in settings.data_dir (pypdf), tracking page numbers.
-      2. Chunk text, attaching {document, page} metadata to each chunk.
-      3. Embed with the configured embedding model.
-      4. Upsert into the Chroma collection at settings.chroma_dir.
-    """
-    raise NotImplementedError("Ingest pipeline pending.")
+__all__ = ["build", "main"]
 
 
 if __name__ == "__main__":
-    ingest()
+    main()

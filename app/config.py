@@ -1,7 +1,11 @@
 """Application settings, loaded from environment / .env.
 
-Default provider is OpenAI. Set LLM_PROVIDER=anthropic to switch the LLM
-(embeddings stay on OpenAI — Anthropic has no embeddings API).
+Two independent provider choices:
+
+  * EMBEDDINGS default to a LOCAL sentence-transformers model, so no API key is
+    needed just to embed/ingest. Set EMBED_PROVIDER=openai to use OpenAI instead.
+  * The answer-generation LLM provider is configurable via LLM_PROVIDER
+    (openai | anthropic) and needs the matching API key.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,26 +14,37 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Provider selection
+    # --- Answer-generation LLM ---
     llm_provider: str = "openai"  # "openai" | "anthropic"
-
-    # OpenAI
     openai_api_key: str = ""
     openai_llm_model: str = "gpt-4o-mini"
-    openai_embed_model: str = "text-embedding-3-small"
-
-    # Anthropic
     anthropic_api_key: str = ""
     anthropic_llm_model: str = "claude-sonnet-5"
 
-    # Storage / paths
+    # --- Embeddings ---
+    # "local" uses sentence-transformers (no key needed). "openai" uses the
+    # OpenAI embeddings API (reuses openai_api_key).
+    embed_provider: str = "local"  # "local" | "openai"
+    local_embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    openai_embed_model: str = "text-embedding-3-small"
+
+    # --- Chunking ---
+    chunk_size: int = 1000
+    chunk_overlap: int = 150
+
+    # --- Retrieval ---
+    top_k: int = 5
+
+    # --- Storage / paths ---
     chroma_dir: str = "chroma_store"
     chroma_collection: str = "policypilot"
     sqlite_path: str = "policypilot.db"
     data_dir: str = "data"
 
-    # Retrieval
-    top_k: int = 5
+    @property
+    def embed_model(self) -> str:
+        """The active embedding model name for the selected provider."""
+        return self.local_embed_model if self.embed_provider == "local" else self.openai_embed_model
 
 
 settings = Settings()

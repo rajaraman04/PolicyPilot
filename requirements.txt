@@ -10,6 +10,8 @@ langchain
 langchain-community
 langchain-openai        # default provider: embeddings + LLM client
 langchain-anthropic     # optional provider: set LLM_PROVIDER=anthropic to use
+langchain-huggingface   # local embeddings integration
+sentence-transformers   # local (no-key) embedding models — default
 chromadb
 
 # --- PDF ingestion ---
