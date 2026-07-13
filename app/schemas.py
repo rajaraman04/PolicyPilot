@@ -31,3 +31,12 @@ class QueryResponse(BaseModel):
     # Production-sense telemetry
     latency_ms: float | None = None
     cost_usd: float | None = None
+
+
+class AnswerResponse(BaseModel):
+    """Response for the single-pass RAG /query endpoint (no verifier yet)."""
+
+    question: str
+    answer: str
+    sources: list[Citation] = []
+    latency_ms: float | None = None

@@ -25,12 +25,25 @@ class Retriever:
         self._embeddings = None
 
     def _ensure_ready(self) -> None:
+        # Load the embedding model first so warm-up can heat it even if the
+        # collection hasn't been built yet (get_collection would raise).
+        if self._embeddings is None:
+            self._embeddings = get_embeddings()
         if self._collection is None:
             client = chromadb.PersistentClient(path=settings.chroma_dir)
             # Raises if the collection was never built — surfaces a clear error.
             self._collection = client.get_collection(settings.chroma_collection)
+
+    def warmup(self) -> None:
+        """Load the embedding model into memory ahead of the first request.
+
+        Runs one real forward pass so weights are fully initialized. Called from
+        the API startup hook so the first /query isn't charged the model-load time.
+        """
         if self._embeddings is None:
             self._embeddings = get_embeddings()
+        self._embeddings.embed_query("warmup")
+        self._ensure_ready()
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[Citation]:
         """Return the top-k relevant chunks for a query, with citation metadata."""
