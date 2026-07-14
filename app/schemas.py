@@ -33,6 +33,15 @@ class QueryResponse(BaseModel):
     cost_usd: float | None = None
 
 
+class LatencyBreakdown(BaseModel):
+    """Per-stage latency (ms) so we can see which stage dominates a query."""
+
+    embed_ms: float = 0.0
+    retrieval_ms: float = 0.0
+    llm_ms: float = 0.0
+    total_ms: float = 0.0
+
+
 class AnswerResponse(BaseModel):
     """Response for the single-pass RAG /query endpoint (no verifier yet)."""
 
@@ -40,3 +49,4 @@ class AnswerResponse(BaseModel):
     answer: str
     sources: list[Citation] = []
     latency_ms: float | None = None
+    timings: LatencyBreakdown | None = None

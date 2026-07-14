@@ -5,6 +5,8 @@ eval harness share one retrieval path. Queries are embedded with the same
 factory used at ingest time, so query and chunk vectors are comparable.
 """
 
+import time
+
 import chromadb
 
 from app.config import settings
@@ -47,19 +49,40 @@ class Retriever:
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[Citation]:
         """Return the top-k relevant chunks for a query, with citation metadata."""
+        citations, _ = self.retrieve_timed(query, top_k=top_k)
+        return citations
+
+    def retrieve_timed(
+        self, query: str, top_k: int | None = None
+    ) -> tuple[list[Citation], dict[str, float]]:
+        """Like ``retrieve`` but also returns a timing breakdown (ms) for the
+        embedding step and the Chroma query step, so callers can see where
+        retrieval latency goes.
+        """
         if not query or not query.strip():
-            return []
+            return [], {"embed_ms": 0.0, "retrieval_ms": 0.0}
 
         self._ensure_ready()
         k = top_k or self.top_k
 
+        t0 = time.perf_counter()
         vector = self._embeddings.embed_query(query)
+        t1 = time.perf_counter()
         result = self._collection.query(
             query_embeddings=[vector],
             n_results=k,
             include=["documents", "metadatas", "distances"],
         )
+        t2 = time.perf_counter()
 
+        timings = {
+            "embed_ms": round((t1 - t0) * 1000, 1),
+            "retrieval_ms": round((t2 - t1) * 1000, 1),
+        }
+        return self._to_citations(result), timings
+
+    @staticmethod
+    def _to_citations(result: dict) -> list[Citation]:
         # Chroma nests results one level per query; we sent a single query.
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]
