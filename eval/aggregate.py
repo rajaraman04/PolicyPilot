@@ -125,7 +125,12 @@ def aggregate(runs: list[list[CaseResult]]) -> AggregateReport:
 
     for qid, cases in by_id.items():
         passes = sum(c.passed for c in cases)
-        is_artifact = any(c.likely_label_artifact for c in cases)
+        # Only excuse a question as a label artifact if EVERY failing run looks
+        # like one. Using any() here hid real failures: a question flagged as an
+        # artifact in two runs would suppress a genuine fabricated citation in
+        # the third.
+        failing = [c for c in cases if not c.passed]
+        is_artifact = bool(failing) and all(c.likely_label_artifact for c in failing)
         if is_artifact:
             artifacts += 1
         else:

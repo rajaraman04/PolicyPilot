@@ -103,6 +103,26 @@ def test_empty_runs_produce_empty_report():
     assert report.runs == 0 and report.questions == 0
 
 
+def test_artifact_flag_in_one_run_does_not_hide_a_real_failure_in_another():
+    """A question that is a label artifact in some runs but genuinely broken in
+    another must still have that genuine failure counted."""
+    artifact_run = _case(qid="q", passed=False, artifact=True,
+                         failures=[Failure(type=FailureType.MISSING_TERMS, detail="x")])
+    real_run = _case(qid="q", passed=False, artifact=False,
+                     failures=[Failure(type=FailureType.FABRICATED_CITATIONS, detail="y")])
+    report = aggregate([[artifact_run], [artifact_run], [real_run]])
+    assert report.genuine_failures.get("fabricated_citations") == 1
+    assert report.label_artifacts == 0
+
+
+def test_question_that_is_artifact_in_all_failing_runs_is_excused():
+    artifact = _case(qid="q", passed=False, artifact=True,
+                     failures=[Failure(type=FailureType.MISSING_TERMS, detail="x")])
+    report = aggregate([[artifact], [artifact]])
+    assert report.label_artifacts == 1
+    assert report.genuine_failures == {}
+
+
 def test_missing_terms_row_is_not_duplicated():
     """Genuine and artifact missing_terms merge into one display row."""
     genuine = _case(qid="a", passed=False,
