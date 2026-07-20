@@ -15,18 +15,31 @@ import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.config import settings
 from app.llm import get_llm
 from app.schemas import Citation
 
 _judge = None
 
+# Judge calls are eval overhead, not product cost, so their token usage is
+# accumulated separately from the RAG pipeline's.
+_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+
 
 def get_judge():
-    """Cached judge model (same provider config as the app)."""
+    """Cached judge model — seeded, unlike the app's client."""
     global _judge
     if _judge is None:
-        _judge = get_llm()
+        _judge = get_llm(seed=settings.llm_seed)
     return _judge
+
+
+def reset_judge_usage() -> None:
+    _usage.update(input_tokens=0, output_tokens=0, calls=0)
+
+
+def get_judge_usage() -> dict[str, int]:
+    return dict(_usage)
 
 
 def _extract_json(text: str) -> dict:
@@ -49,6 +62,11 @@ def _invoke(llm, system: str, user: str) -> str:
     response = (llm or get_judge()).invoke(
         [SystemMessage(content=system), HumanMessage(content=user)]
     )
+    usage = getattr(response, "usage_metadata", None)
+    if usage:
+        _usage["input_tokens"] += usage.get("input_tokens", 0)
+        _usage["output_tokens"] += usage.get("output_tokens", 0)
+        _usage["calls"] += 1
     content = response.content
     return content if isinstance(content, str) else str(content)
 

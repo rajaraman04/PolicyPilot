@@ -35,6 +35,17 @@ class Settings(BaseSettings):
     # --- Retrieval ---
     top_k: int = 5
 
+    # --- Reproducibility ---
+    # Seed passed to providers that support it (OpenAI). Best-effort: results
+    # can still shift when the provider changes backend infra, which is why the
+    # runner records system_fingerprint alongside results.
+    llm_seed: int | None = 20240720
+
+    # --- Pricing overrides (USD per 1M tokens) ---
+    # Set these when the built-in table in app/pricing.py goes stale.
+    price_input_per_1m: float | None = None
+    price_output_per_1m: float | None = None
+
     # --- Storage / paths ---
     chroma_dir: str = "chroma_store"
     chroma_collection: str = "policypilot"
