@@ -42,6 +42,17 @@ class LatencyBreakdown(BaseModel):
     total_ms: float = 0.0
 
 
+class TokenUsage(BaseModel):
+    """Tokens consumed by the answer-generation call."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
 class AnswerResponse(BaseModel):
     """Response for the single-pass RAG /query endpoint (no verifier yet)."""
 
@@ -50,3 +61,10 @@ class AnswerResponse(BaseModel):
     sources: list[Citation] = []
     latency_ms: float | None = None
     timings: LatencyBreakdown | None = None
+
+    # Product cost/telemetry (excludes any eval-judge calls).
+    usage: TokenUsage | None = None
+    cost_usd: float | None = None
+    model: str | None = None
+    # Provider backend identifier; when this changes, seeded runs may drift.
+    system_fingerprint: str | None = None

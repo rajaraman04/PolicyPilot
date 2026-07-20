@@ -14,8 +14,9 @@ import time
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.llm import get_llm
+from app.pricing import estimate_cost_usd
 from app.retriever import Retriever
-from app.schemas import AnswerResponse, Citation, LatencyBreakdown
+from app.schemas import AnswerResponse, Citation, LatencyBreakdown, TokenUsage
 
 logger = logging.getLogger("uvicorn")
 
@@ -121,8 +122,11 @@ def answer_question(question: str, top_k: int | None = None) -> AnswerResponse:
 
     citations, timings = _retriever.retrieve_timed(question, top_k=top_k)
     llm_ms = 0.0
+    usage: TokenUsage | None = None
+    model_name: str | None = None
+    fingerprint: str | None = None
 
-    # No-evidence path: don't even call the LLM.
+    # No-evidence path: don't even call the LLM (so it is also free).
     if not citations:
         answer_text = NO_EVIDENCE_MSG
         sources: list[Citation] = []
@@ -143,6 +147,16 @@ def answer_question(question: str, top_k: int | None = None) -> AnswerResponse:
         answer_text = answer_text.strip()
         sources = _dedupe_sources(citations)
 
+        raw_usage = getattr(response, "usage_metadata", None)
+        if raw_usage:
+            usage = TokenUsage(
+                input_tokens=raw_usage.get("input_tokens", 0),
+                output_tokens=raw_usage.get("output_tokens", 0),
+            )
+        meta = getattr(response, "response_metadata", None) or {}
+        model_name = meta.get("model_name") or meta.get("model")
+        fingerprint = meta.get("system_fingerprint")
+
     total_ms = (time.perf_counter() - start) * 1000
     breakdown = LatencyBreakdown(
         embed_ms=timings["embed_ms"],
@@ -152,10 +166,20 @@ def answer_question(question: str, top_k: int | None = None) -> AnswerResponse:
     )
     _log_breakdown(question, breakdown)
 
+    cost = (
+        estimate_cost_usd(model_name or "", usage.input_tokens, usage.output_tokens)
+        if usage
+        else 0.0  # no LLM call was made (no-evidence path)
+    )
+
     return AnswerResponse(
         question=question,
         answer=answer_text,
         sources=sources,
         latency_ms=breakdown.total_ms,
         timings=breakdown,
+        usage=usage,
+        cost_usd=cost,
+        model=model_name,
+        system_fingerprint=fingerprint,
     )
