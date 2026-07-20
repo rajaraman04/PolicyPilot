@@ -23,6 +23,7 @@ streamlit
 # --- Config / utils ---
 python-dotenv
 httpx                   # Streamlit -> FastAPI calls
+pyyaml                  # eval gold-set files
 
 # --- Tests ---
 pytest
