@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas import Citation
 from eval.gold_set import Behavior, Category, GoldQuestion
-from eval.judge import judge_claims, judge_is_refusal
+from eval.judge import SUPPORTED, UNSUPPORTED, judge_is_refusal, judge_sentence_support
 
 # Matches the citation format our prompt asks for: (nist_csf.pdf, p.8)
 # Tolerates "p.8", "p 8", "pp. 8".
@@ -45,9 +45,16 @@ _REFUSAL_FAST_PATH = "don't have enough information"
 
 class FaithfulnessResult(BaseModel):
     applicable: bool = True
-    score: float = 1.0  # fraction of claims supported by context
+    score: float = 1.0  # fraction of judged sentences supported by context
     supported_claims: list[str] = Field(default_factory=list)
     unsupported_claims: list[str] = Field(default_factory=list)
+    non_claims: list[str] = Field(default_factory=list)
+
+    # Sentences our deterministic splitter produced. Identical for identical
+    # answer text, regardless of the judge — the stability anchor.
+    sentences_considered: int = 0
+    # supported + unsupported (excludes NOT_A_CLAIM).
+    denominator: int = 0
 
     @property
     def unsupported_rate(self) -> float:
@@ -178,23 +185,47 @@ def is_refusal(answer: str, llm=None, use_llm: bool = True) -> bool:
 
 
 def faithfulness(answer: str, citations: list[Citation], llm=None) -> FaithfulnessResult:
-    """Fraction of the answer's claims that are grounded in the retrieved context."""
+    """Fraction of the answer's sentences that are grounded in the retrieved context.
+
+    The scoring unit is a sentence produced by our own deterministic splitter, so
+    the denominator cannot drift between runs the way model-generated "atomic
+    claims" did. The judge only labels a fixed list it is handed.
+    """
     if not answer.strip():
         return FaithfulnessResult(applicable=False)
 
-    claims = judge_claims(answer, citations, llm=llm)
-    if not claims:
-        # No factual claims (e.g. a pure refusal) — nothing to be unfaithful about.
+    sentences = [s for s in split_sentences(answer) if _is_factual_sentence(s)]
+    if not sentences:
+        # e.g. a short refusal — nothing to be unfaithful about.
         return FaithfulnessResult(applicable=False)
 
-    supported = [c.get("claim", "") for c in claims if c.get("supported")]
-    unsupported = [c.get("claim", "") for c in claims if not c.get("supported")]
-    score = len(supported) / len(claims)
+    verdicts = judge_sentence_support(sentences, citations, llm=llm)
+
+    supported, unsupported, non_claims = [], [], []
+    for sentence, verdict in zip(sentences, verdicts):
+        if verdict == SUPPORTED:
+            supported.append(sentence)
+        elif verdict == UNSUPPORTED:
+            unsupported.append(sentence)
+        else:
+            non_claims.append(sentence)
+
+    denominator = len(supported) + len(unsupported)
+    if denominator == 0:
+        # Every sentence was a preamble/heading — no factual content to score.
+        return FaithfulnessResult(
+            applicable=False,
+            non_claims=non_claims,
+            sentences_considered=len(sentences),
+        )
 
     return FaithfulnessResult(
-        score=round(score, 4),
+        score=round(len(supported) / denominator, 4),
         supported_claims=supported,
         unsupported_claims=unsupported,
+        non_claims=non_claims,
+        sentences_considered=len(sentences),
+        denominator=denominator,
     )
 
 

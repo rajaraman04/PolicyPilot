@@ -61,27 +61,69 @@ def format_context(citations: list[Citation]) -> str:
     )
 
 
-CLAIM_JUDGE_SYSTEM = (
-    "You are a strict grounding evaluator. You are given CONTEXT passages and an ANSWER.\n\n"
-    "1. Decompose the ANSWER into atomic factual claims. A claim is a single verifiable "
-    "assertion. Ignore pure meta-commentary (e.g. 'I don't have enough information'), "
-    "citation markers, and hedging language.\n"
-    "2. For each claim decide whether it is FULLY supported by the CONTEXT. A claim is "
-    "supported only if the CONTEXT states or directly entails it. Plausible-but-absent "
-    "information is NOT supported. Your own world knowledge is irrelevant.\n\n"
-    'Return JSON only: {"claims": [{"claim": "...", "supported": true, "reason": "..."}]}\n'
-    "If the answer contains no factual claims, return an empty claims list."
+SUPPORTED = "SUPPORTED"
+UNSUPPORTED = "UNSUPPORTED"
+NOT_A_CLAIM = "NOT_A_CLAIM"
+_VALID_VERDICTS = {SUPPORTED, UNSUPPORTED, NOT_A_CLAIM}
+
+VERDICT_JUDGE_SYSTEM = (
+    "You are a strict grounding evaluator. You are given CONTEXT passages and a "
+    "NUMBERED list of sentences taken from an ANSWER.\n\n"
+    "For EACH numbered sentence return exactly one verdict:\n"
+    f"  {SUPPORTED}   - the CONTEXT states or directly entails the sentence.\n"
+    f"  {UNSUPPORTED} - the sentence asserts something the CONTEXT does not support. "
+    "Plausible-but-absent information is UNSUPPORTED.\n"
+    f"  {NOT_A_CLAIM} - the sentence makes no factual assertion (a preamble, heading, "
+    "or pure hedging).\n\n"
+    "Judge only against the CONTEXT. Your own world knowledge is irrelevant. Ignore "
+    "inline citation markers when judging.\n\n"
+    'Return JSON only: {"verdicts": [{"index": 1, "verdict": "SUPPORTED"}, ...]}\n'
+    "You MUST return exactly one entry per numbered sentence, using the same indices."
 )
 
 
-def judge_claims(answer: str, citations: list[Citation], llm=None) -> list[dict]:
-    """Decompose an answer into claims and label each supported/unsupported."""
-    user = f"CONTEXT:\n{format_context(citations)}\n\nANSWER:\n{answer}"
-    data = _extract_json(_invoke(llm, CLAIM_JUDGE_SYSTEM, user))
-    claims = data.get("claims", [])
-    if not isinstance(claims, list):
-        raise ValueError(f"judge 'claims' must be a list, got {type(claims).__name__}")
-    return claims
+def judge_sentence_support(
+    sentences: list[str], citations: list[Citation], llm=None
+) -> list[str]:
+    """Label each sentence SUPPORTED / UNSUPPORTED / NOT_A_CLAIM.
+
+    The caller supplies the sentence list, so the *number* of items scored is
+    fixed by deterministic code rather than by the model. Returns verdicts in
+    the same order as ``sentences``; a response of the wrong length or with bad
+    indices raises rather than silently rescaling the metric.
+    """
+    if not sentences:
+        return []
+
+    numbered = "\n".join(f"{i}. {s}" for i, s in enumerate(sentences, start=1))
+    user = f"CONTEXT:\n{format_context(citations)}\n\nANSWER SENTENCES:\n{numbered}"
+    data = _extract_json(_invoke(llm, VERDICT_JUDGE_SYSTEM, user))
+
+    raw = data.get("verdicts", [])
+    if not isinstance(raw, list):
+        raise ValueError(f"judge 'verdicts' must be a list, got {type(raw).__name__}")
+    if len(raw) != len(sentences):
+        raise ValueError(
+            f"judge returned {len(raw)} verdicts for {len(sentences)} sentences — "
+            "refusing to rescale the faithfulness denominator"
+        )
+
+    by_index: dict[int, str] = {}
+    for entry in raw:
+        try:
+            idx = int(entry["index"])
+            verdict = str(entry["verdict"]).strip().upper()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"malformed verdict entry: {entry!r}") from exc
+        if verdict not in _VALID_VERDICTS:
+            raise ValueError(f"unknown verdict {verdict!r} (expected one of {_VALID_VERDICTS})")
+        by_index[idx] = verdict
+
+    missing = [i for i in range(1, len(sentences) + 1) if i not in by_index]
+    if missing:
+        raise ValueError(f"judge omitted verdicts for sentence index/indices {missing}")
+
+    return [by_index[i] for i in range(1, len(sentences) + 1)]
 
 
 REFUSAL_JUDGE_SYSTEM = (

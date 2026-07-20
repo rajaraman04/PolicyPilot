@@ -7,6 +7,7 @@ and offline.
 """
 
 import json
+import re
 
 import pytest
 
@@ -34,6 +35,29 @@ class FakeLLM:
     def invoke(self, messages):
         self.calls.append(messages)
         return _FakeResponse(json.dumps(self.payload))
+
+
+class VerdictLLM:
+    """Judge fake: emits one verdict per numbered sentence found in the prompt.
+
+    Mirrors the real contract (exactly one verdict per supplied sentence), so
+    tests don't have to hard-code how many sentences an answer splits into.
+    """
+
+    def __init__(self, default="SUPPORTED", overrides=None):
+        self.default = default
+        self.overrides = overrides or {}
+        self.last_sentence_count = None
+
+    def invoke(self, messages):
+        user = messages[-1].content
+        n = len(re.findall(r"^\s*\d+\.\s", user, re.M))
+        self.last_sentence_count = n
+        verdicts = [
+            {"index": i, "verdict": self.overrides.get(i, self.default)}
+            for i in range(1, n + 1)
+        ]
+        return _FakeResponse(json.dumps({"verdicts": verdicts}))
 
 
 def cite(doc="nist_csf.pdf", page=8, snippet="text"):
@@ -115,30 +139,36 @@ def test_retrieval_relevance_not_applicable_when_no_expected_docs():
 # --- metric 1: faithfulness (judged) ---------------------------------------
 
 
-def test_faithfulness_all_claims_supported():
-    llm = FakeLLM({"claims": [
-        {"claim": "CSF has six functions", "supported": True},
-        {"claim": "Govern is central", "supported": True},
-    ]})
-    res = metrics.faithfulness("some answer", [cite()], llm=llm)
+TWO_SENTENCE_ANSWER = (
+    "The framework defines six core functions (nist_csf.pdf, p.8). "
+    "Govern informs the other five functions (nist_csf.pdf, p.9)."
+)
+
+
+def test_faithfulness_all_sentences_supported():
+    llm = VerdictLLM(default="SUPPORTED")
+    res = metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()], llm=llm)
     assert res.score == 1.0 and res.unsupported_rate == 0.0
-    assert not res.unsupported_claims
+    assert res.denominator == 2 and not res.unsupported_claims
 
 
-def test_faithfulness_reports_unsupported_claims():
-    llm = FakeLLM({"claims": [
-        {"claim": "CSF has six functions", "supported": True},
-        {"claim": "CSF mandates 90-day audits", "supported": False},
-    ]})
-    res = metrics.faithfulness("some answer", [cite()], llm=llm)
-    assert res.score == 0.5
-    assert res.unsupported_claims == ["CSF mandates 90-day audits"]
-    assert res.unsupported_rate == 0.5
+def test_faithfulness_reports_unsupported_sentences():
+    llm = VerdictLLM(default="SUPPORTED", overrides={2: "UNSUPPORTED"})
+    res = metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()], llm=llm)
+    assert res.score == 0.5 and res.unsupported_rate == 0.5
+    assert len(res.unsupported_claims) == 1
 
 
-def test_faithfulness_not_applicable_when_no_claims():
-    llm = FakeLLM({"claims": []})
-    res = metrics.faithfulness("I don't have enough information.", [], llm=llm)
+def test_faithfulness_excludes_non_claims_from_denominator():
+    llm = VerdictLLM(default="SUPPORTED", overrides={1: "NOT_A_CLAIM"})
+    res = metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()], llm=llm)
+    assert res.sentences_considered == 2
+    assert res.denominator == 1  # the non-claim is excluded
+    assert res.score == 1.0
+
+
+def test_faithfulness_not_applicable_for_short_refusal():
+    res = metrics.faithfulness("I don't know.", [], llm=VerdictLLM())
     assert res.applicable is False
 
 
@@ -149,7 +179,51 @@ def test_judge_malformed_json_raises():
             return _FakeResponse("not json at all")
 
     with pytest.raises(ValueError):
-        metrics.faithfulness("answer", [cite()], llm=BadLLM())
+        metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()], llm=BadLLM())
+
+
+# --- determinism of the faithfulness denominator ---------------------------
+
+
+def test_denominator_is_fixed_by_our_splitter_not_the_judge():
+    """Same answer text => same sentence count, whatever the judge says.
+
+    This is the root-cause fix for the run-to-run score variance: the model no
+    longer decides how many units are scored.
+    """
+    counts = set()
+    for verdicts in ("SUPPORTED", "UNSUPPORTED", "NOT_A_CLAIM"):
+        res = metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()],
+                                   llm=VerdictLLM(default=verdicts))
+        counts.add(res.sentences_considered)
+    assert counts == {2}, f"denominator drifted across judge behaviours: {counts}"
+
+
+def test_judge_receives_exactly_the_sentences_we_counted():
+    llm = VerdictLLM()
+    res = metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()], llm=llm)
+    assert llm.last_sentence_count == res.sentences_considered == 2
+
+
+def test_wrong_length_verdict_list_raises_rather_than_rescaling():
+    """A judge returning too few verdicts must not silently shrink the metric."""
+    class ShortLLM:
+        def invoke(self, messages):
+            return _FakeResponse(json.dumps({"verdicts": [{"index": 1, "verdict": "SUPPORTED"}]}))
+
+    with pytest.raises(ValueError, match="refusing to rescale"):
+        metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()], llm=ShortLLM())
+
+
+def test_unknown_verdict_label_raises():
+    class WeirdLLM:
+        def invoke(self, messages):
+            return _FakeResponse(json.dumps({"verdicts": [
+                {"index": 1, "verdict": "MAYBE"}, {"index": 2, "verdict": "SUPPORTED"},
+            ]}))
+
+    with pytest.raises(ValueError, match="unknown verdict"):
+        metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()], llm=WeirdLLM())
 
 
 # --- excludes / refusal ----------------------------------------------------
@@ -184,7 +258,7 @@ def _q(**over):
 
 
 def test_case_passes_when_answer_grounded_cited_and_relevant():
-    llm = FakeLLM({"claims": [{"claim": "CSF defines the Core", "supported": True}]})
+    llm = VerdictLLM(default="SUPPORTED")
     ans = "The framework defines the Core, Profiles and Tiers (nist_csf.pdf, p.8)."
     res = metrics.evaluate_case(_q(), ans, [cite(page=8)], llm=llm)
     assert res.passed, res.failures
@@ -262,7 +336,7 @@ def test_forbidden_string_is_its_own_bucket():
 
 def test_label_artifact_flagged_when_only_a_term_is_missing():
     """Right answer, clean metrics, strict label => flagged as label artifact."""
-    llm = FakeLLM({"claims": [{"claim": "CSF defines Profiles", "supported": True}]})
+    llm = VerdictLLM(default="SUPPORTED")
     q = _q(expected_answer_contains=["Organizational Profiles"])
     ans = "The framework defines the Core, CSF Profiles and Tiers (nist_csf.pdf, p.8)."
     res = metrics.evaluate_case(q, ans, [cite(page=8)], llm=llm)
@@ -273,11 +347,9 @@ def test_label_artifact_flagged_when_only_a_term_is_missing():
 
 def test_genuine_error_is_not_flagged_as_label_artifact():
     """Missing term AND an unsupported claim => a real model error."""
-    llm = FakeLLM({"claims": [
-        {"claim": "CSF mandates 90-day audits", "supported": False},
-    ]})
+    llm = VerdictLLM(default="UNSUPPORTED")
     q = _q(expected_answer_contains=["Tiers"])
-    ans = "The CSF mandates 90-day audits (nist_csf.pdf, p.8)."
+    ans = "The CSF mandates ninety day audits for all systems (nist_csf.pdf, p.8)."
     res = metrics.evaluate_case(q, ans, [cite(page=8)], llm=llm)
     assert res.likely_label_artifact is False
     assert FailureType.UNSUPPORTED_CLAIMS in res.failure_types()
