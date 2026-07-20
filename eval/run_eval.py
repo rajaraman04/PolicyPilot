@@ -1,8 +1,8 @@
 """Evaluation harness entrypoint.
 
-Run:
+Run (either form works):
     python eval/run_eval.py                    # one pass over the gold set
-    python eval/run_eval.py --runs 3           # repeated, reports mean +/- spread
+    python -m eval.run_eval --runs 3           # repeated, reports mean +/- spread
     python eval/run_eval.py --category no_evidence
     python eval/run_eval.py --ids q001 q036
     python eval/run_eval.py --dry-run          # estimate cost, call nothing
@@ -18,16 +18,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.config import settings
-from app.pricing import estimate_cost_usd
-from app.rag import answer_question, warmup
-from eval.aggregate import aggregate, attach_telemetry, summarize_failure_counts
-from eval.gold_set import Category, load_gold_set
-from eval.judge import get_judge_usage, reset_judge_usage
-from eval.metrics import evaluate_case
+# Running this file by path (python eval/run_eval.py) puts eval/ on sys.path
+# rather than the project root, so `app` would not be importable. Add the root
+# so both `python eval/run_eval.py` and `python -m eval.run_eval` work.
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from app.config import settings  # noqa: E402
+from app.pricing import estimate_cost_usd  # noqa: E402
+from app.rag import answer_question, warmup  # noqa: E402
+from eval.aggregate import (  # noqa: E402
+    aggregate,
+    attach_telemetry,
+    summarize_failure_counts,
+)
+from eval.gold_set import Category, load_gold_set  # noqa: E402
+from eval.judge import get_judge_usage, reset_judge_usage  # noqa: E402
+from eval.metrics import evaluate_case  # noqa: E402
 
 RESULTS_DIR = Path(__file__).parent / "results"
 
