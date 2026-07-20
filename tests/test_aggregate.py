@@ -1,6 +1,6 @@
 """Tests for multi-run aggregation."""
 
-from eval.aggregate import MetricStat, aggregate
+from eval.aggregate import MetricStat, aggregate, summarize_failure_counts
 from eval.gold_set import Behavior, Category
 from eval.metrics import CaseResult, Failure, FailureType, FaithfulnessResult
 
@@ -101,3 +101,15 @@ def test_inapplicable_metrics_are_excluded_from_averages():
 def test_empty_runs_produce_empty_report():
     report = aggregate([])
     assert report.runs == 0 and report.questions == 0
+
+
+def test_missing_terms_row_is_not_duplicated():
+    """Genuine and artifact missing_terms merge into one display row."""
+    genuine = _case(qid="a", passed=False,
+                    failures=[Failure(type=FailureType.MISSING_TERMS, detail="x")])
+    artifact = _case(qid="b", passed=False, artifact=True,
+                     failures=[Failure(type=FailureType.MISSING_TERMS, detail="y")])
+    rows = summarize_failure_counts(aggregate([[genuine, artifact]]))
+    missing_rows = [r for r in rows if r[0] == "missing_terms"]
+    assert len(missing_rows) == 1
+    assert missing_rows[0] == ("missing_terms", 1, 1)

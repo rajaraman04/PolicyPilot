@@ -174,8 +174,14 @@ def attach_telemetry(report: AggregateReport, responses: list) -> AggregateRepor
 
 
 def summarize_failure_counts(report: AggregateReport) -> list[tuple[str, int, int]]:
-    """Rows of (failure_type, genuine_count, label_artifact_count) for display."""
-    rows = [(ft, count, 0) for ft, count in report.genuine_failures.items()]
-    if report.label_artifacts:
-        rows.append((FailureType.MISSING_TERMS.value, 0, report.label_artifacts))
-    return rows
+    """Rows of (failure_type, genuine_count, label_artifact_count) for display.
+
+    Label artifacts are always missing_terms, so they merge into that row rather
+    than printing a confusing duplicate line.
+    """
+    counts = dict(report.genuine_failures)
+    key = FailureType.MISSING_TERMS.value
+    rows = [(ft, count, 0) for ft, count in counts.items() if ft != key]
+    if key in counts or report.label_artifacts:
+        rows.append((key, counts.get(key, 0), report.label_artifacts))
+    return sorted(rows, key=lambda r: -(r[1] + r[2]))
