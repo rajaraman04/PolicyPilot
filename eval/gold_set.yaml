@@ -93,7 +93,7 @@
   expected_behavior: answerable
   expected_source_docs: ["nist_rmf.pdf"]
   expected_answer_contains: ["offensive", "attack surface", "prompt injection", "data poisoning"]
-  notes: "VERIFIED p.14 (2.9): (1) lowering barriers to offensive cyber capabilities, (2) expanded attack surface — GAI itself vulnerable to prompt injection / data poisoning"
+  notes: "VERIFIED in nist_rmf.pdf (the GenAI Profile, NIST AI 600-1) p.14, section 2.9 Information Security: (1) lowering barriers to offensive cyber capabilities, (2) expanded attack surface — GAI itself vulnerable to prompt injection / data poisoning"
 
 - id: q010
   question: "Explain Measure 2.12, and under which Action ID do Dangerous GAI risks fall?"
@@ -101,7 +101,7 @@
   expected_behavior: answerable
   expected_source_docs: ["nist_rmf.pdf"]
   expected_answer_contains: ["Environmental impact", "sustainability", "MS-2.12-001"]
-  notes: "VERIFIED p.41: 'MEASURE 2.12: Environmental impact and sustainability of AI model training and management activities'; MS-2.12-001 maps to Dangerous, Violent, or Hateful Content"
+  notes: "VERIFIED in nist_rmf.pdf (the GenAI Profile, NIST AI 600-1) p.41: 'MEASURE 2.12: Environmental impact and sustainability of AI model training and management activities'; MS-2.12-001 maps to Dangerous, Violent, or Hateful Content"
 
 # ── SINGLE-DOC: nist_ai_rmf.pdf ───────────────────────────
 - id: q011
@@ -129,12 +129,12 @@
   notes: "VERIFIED p.9: 'risk is a function of 1) the negative impact, or magnitude of harm... and 2) the likelihood of occurrence'"
 
 - id: q014
-  question: "Give examples of potential harms related to AI systems."
+  question: "What are the categories of entities that can experience potential harms from AI systems?"
   category: single_doc
   expected_behavior: answerable
   expected_source_docs: ["nist_ai_rmf.pdf"]
   expected_answer_contains: ["people", "organizations", "ecosystems"]
-  notes: "LIMITATION: the concrete harm examples live INSIDE Figure 1 (an image) and are NOT text-extractable, so they are not in the vector store. Only the p.10 caption + p.9 text are retrievable: harm affects 'people, organizations, and ecosystems'. Labels are scoped to that. Consider rewording the question or adding OCR ingestion."
+  notes: "REFRAMED from specific examples to harm categories because Figure 1's concrete examples are not text-extractable from the PDF. Only the harm categories are in searchable text: the p.10 caption and p.9 prose state harm affects 'people, organizations, and ecosystems'. This tests what the corpus can actually retrieve; the original wording asked for figure-embedded content the vector store does not contain (an eval-limitation to note in the write-up)."
 
 - id: q015
   question: "Name the AI system's key dimensions."
