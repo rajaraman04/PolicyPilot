@@ -53,8 +53,23 @@ class TokenUsage(BaseModel):
         return self.input_tokens + self.output_tokens
 
 
+class CitationRef(BaseModel):
+    """A (document, page) pointer, without snippet text."""
+
+    document: str
+    page: int
+
+
+class VerificationResult(BaseModel):
+    """Outcome of checking an answer's citations against what was retrieved."""
+
+    verified: bool = True  # False if any cited source was not in the retrieved set
+    passed: list[CitationRef] = []  # cited AND present in retrieved set
+    fabricated: list[CitationRef] = []  # cited but NOT retrieved
+
+
 class AnswerResponse(BaseModel):
-    """Response for the single-pass RAG /query endpoint (no verifier yet)."""
+    """Response for the single-pass RAG /query endpoint."""
 
     question: str
     answer: str
@@ -68,3 +83,7 @@ class AnswerResponse(BaseModel):
     model: str | None = None
     # Provider backend identifier; when this changes, seeded runs may drift.
     system_fingerprint: str | None = None
+
+    # Citation verification (Verifier node). When it fires, `answer` above is
+    # the marked version — fabricated citations replaced with an [unverified] tag.
+    verification: VerificationResult | None = None

@@ -17,6 +17,7 @@ from app.llm import get_llm
 from app.pricing import estimate_cost_usd
 from app.retriever import Retriever
 from app.schemas import AnswerResponse, Citation, LatencyBreakdown, TokenUsage
+from app.verifier import verify_citations
 
 logger = logging.getLogger("uvicorn")
 
@@ -112,11 +113,18 @@ def _log_breakdown(question: str, b: LatencyBreakdown) -> None:
     )
 
 
-def answer_question(question: str, top_k: int | None = None) -> AnswerResponse:
+def answer_question(
+    question: str, top_k: int | None = None, verify: bool = True
+) -> AnswerResponse:
     """Retrieve evidence and produce a grounded, cited answer.
 
     Times each stage (embedding, Chroma retrieval, LLM call) separately and
     returns the breakdown so callers can see which stage dominates latency.
+
+    When ``verify`` is True (default), the Verifier checks every citation against
+    what was actually retrieved and marks any fabricated citation as [unverified].
+    Set verify=False to reproduce the pre-verifier single-pass baseline (the
+    control arm of the ablation).
     """
     start = time.perf_counter()
 
@@ -166,6 +174,18 @@ def answer_question(question: str, top_k: int | None = None) -> AnswerResponse:
     )
     _log_breakdown(question, breakdown)
 
+    # Verify citations against what was actually retrieved. Fabricated citations
+    # are marked [unverified] in the returned answer (deterministic, no LLM call).
+    verification = None
+    if verify:
+        verification, answer_text = verify_citations(answer_text, citations)
+        if not verification.verified:
+            logger.info(
+                "verifier flagged %d fabricated citation(s): %s",
+                len(verification.fabricated),
+                [f"({c.document}, p.{c.page})" for c in verification.fabricated],
+            )
+
     cost = (
         estimate_cost_usd(model_name or "", usage.input_tokens, usage.output_tokens)
         if usage
@@ -182,4 +202,5 @@ def answer_question(question: str, top_k: int | None = None) -> AnswerResponse:
         cost_usd=cost,
         model=model_name,
         system_fingerprint=fingerprint,
+        verification=verification,
     )
