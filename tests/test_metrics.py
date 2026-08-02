@@ -229,6 +229,40 @@ def test_unknown_verdict_label_raises():
 # --- excludes / refusal ----------------------------------------------------
 
 
+def test_find_missing_terms_matches_inflectional_variants_generally():
+    """The stemming fix is a general rule across unrelated word families,
+    not a special case for any one question."""
+    # term has the inflection, answer has the base
+    assert metrics.find_missing_terms("govern informs the others", ["informs"]) == []
+    assert metrics.find_missing_terms("there are four tier levels", ["Tiers"]) == []
+    assert metrics.find_missing_terms("the system responds quickly", ["respond"]) == []
+    # and the reverse: term is the base, answer has the inflection
+    assert metrics.find_missing_terms("it manages the risk", ["manage"]) == []
+
+
+def test_find_missing_terms_does_not_unify_derivational_pairs():
+    """center/central is derivational, not inflectional — deliberately NOT matched
+    (confirms the fix is not tuned to make q020 pass)."""
+    assert metrics.find_missing_terms("GOVERN is central to the framework", ["center"]) == ["center"]
+    assert metrics.find_missing_terms("this is a decision", ["decide"]) == ["decide"]
+
+
+def test_find_missing_terms_preserves_exact_substring_matches():
+    """Nothing that matched as a substring before may regress."""
+    assert metrics.find_missing_terms("the CSF Core defines outcomes", ["Core"]) == []
+    # multi-word substring still works
+    assert metrics.find_missing_terms("based on risk tolerance levels", ["risk tolerance"]) == []
+
+
+def test_find_missing_terms_contiguity_blocks_cross_phrase_false_positive():
+    """A multi-word term must appear as a contiguous run, not scattered."""
+    assert metrics.find_missing_terms("tolerance for that risk", ["risk tolerance"]) == ["risk tolerance"]
+
+
+def test_find_missing_terms_absent_term_still_missing():
+    assert metrics.find_missing_terms("value and supply chain handling", ["Value Chain"]) == ["Value Chain"]
+
+
 def test_find_excluded_is_case_insensitive():
     assert metrics.find_excluded("As FreeBot, I can help", ["freebot"]) == ["freebot"]
     assert metrics.find_excluded("A normal answer", ["freebot"]) == []

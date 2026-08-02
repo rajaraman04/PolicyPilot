@@ -17,6 +17,7 @@ a misleading 0.0 or 1.0 — averaging an inapplicable metric would skew results.
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -135,10 +136,55 @@ def find_excluded(answer: str, excludes: list[str]) -> list[str]:
     return [term for term in excludes if term.lower() in low]
 
 
+# Inflectional endings only. Stripping these unifies plural/verb variants
+# (inform/informs/informing, tier/tiers) without touching word roots. It does
+# NOT handle derivational cross-POS pairs (center/central, decide/decision) —
+# those cannot be unified by suffix-stripping without collapsing unrelated words,
+# so they are deliberately left as a labeling decision, not a matcher change.
+_STEM_SUFFIXES = ("ingly", "iedly", "edly", "ing", "ied", "ies", "ed", "ly", "es", "s")
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _stem(word: str) -> str:
+    """Strip one inflectional suffix, guarding against mangling short roots."""
+    w = word.lower()
+    for suf in _STEM_SUFFIXES:
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            return w[: -len(suf)]
+    return w
+
+
+def _stem_tokens(text: str) -> list[str]:
+    return [_stem(t) for t in _WORD_RE.findall(text.lower())]
+
+
+def _term_present(term: str, answer_lower: str, answer_stems: list[str]) -> bool:
+    """A term is present if it matches as an exact substring (original behaviour,
+    so nothing that matched before regresses) OR as a stemmed, CONTIGUOUS token
+    run (so morphological variants match). Contiguity prevents cross-phrase false
+    positives like 'risk tolerance' matching 'tolerance for risk'.
+    """
+    if term.lower() in answer_lower:
+        return True
+    term_stems = _stem_tokens(term)
+    if not term_stems:
+        return True
+    n = len(term_stems)
+    for i in range(len(answer_stems) - n + 1):
+        if answer_stems[i : i + n] == term_stems:
+            return True
+    return False
+
+
 def find_missing_terms(answer: str, expected: list[str]) -> list[str]:
-    """Return expected terms absent from the answer (case-insensitive)."""
-    low = answer.lower()
-    return [term for term in expected if term.lower() not in low]
+    """Return expected terms absent from the answer.
+
+    Matching is case-insensitive and tolerant of inflectional variants (a term
+    'informs' matches an answer saying 'inform'); see _term_present.
+    """
+    answer_lower = answer.lower()
+    answer_stems = _stem_tokens(answer)
+    return [term for term in expected if not _term_present(term, answer_lower, answer_stems)]
 
 
 def is_refusal(answer: str, llm=None, use_llm: bool = True) -> bool:
