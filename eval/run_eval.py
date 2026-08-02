@@ -214,6 +214,8 @@ def main() -> None:
                         help="estimate cost and exit without calling anything")
     parser.add_argument("--no-verifier", action="store_true",
                         help="disable the citation verifier (single-pass control arm)")
+    parser.add_argument("--plan", action="store_true",
+                        help="enable the Planner (decompose into sub-queries, balanced retrieval)")
     parser.add_argument("--ablation", action="store_true",
                         help="run both arms (control vs +verifier) on shared generation and compare")
     parser.add_argument("--out", help="explicit output path for the JSON results file")
@@ -272,7 +274,7 @@ def main() -> None:
         for i, q in enumerate(questions, start=1):
             print(f"\rrun {run_no}/{args.runs}  case {i}/{len(questions)}  {q.id}   ",
                   end="", flush=True)
-            resp = answer_question(q.question, verify=verify)
+            resp = answer_question(q.question, verify=verify, plan=args.plan)
             responses.append(resp)
             results.append(evaluate_case(q, resp.answer, resp.sources))
         all_runs.append(results)
@@ -297,6 +299,7 @@ def main() -> None:
         "runs": args.runs,
         "questions": len(questions),
         "verifier_enabled": verify,
+        "planner_enabled": args.plan,
         "model": responses[0].model if responses else None,
         "system_fingerprint": responses[0].system_fingerprint if responses else None,
         "llm_seed": settings.llm_seed,

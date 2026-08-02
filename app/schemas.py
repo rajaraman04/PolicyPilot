@@ -36,6 +36,7 @@ class QueryResponse(BaseModel):
 class LatencyBreakdown(BaseModel):
     """Per-stage latency (ms) so we can see which stage dominates a query."""
 
+    plan_ms: float = 0.0  # Planner LLM call (0 when planning is disabled)
     embed_ms: float = 0.0
     retrieval_ms: float = 0.0
     llm_ms: float = 0.0
@@ -87,3 +88,6 @@ class AnswerResponse(BaseModel):
     # Citation verification (Verifier node). When it fires, `answer` above is
     # the marked version — fabricated citations replaced with an [unverified] tag.
     verification: VerificationResult | None = None
+
+    # Sub-queries the Planner produced (None when planning is disabled).
+    planned_queries: list[str] | None = None
