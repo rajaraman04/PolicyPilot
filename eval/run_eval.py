@@ -32,7 +32,9 @@ if str(_ROOT) not in sys.path:
 from app.config import settings  # noqa: E402
 from app.pricing import estimate_cost_usd  # noqa: E402
 from app.rag import answer_question, warmup  # noqa: E402
+from app.verifier import verify_citations  # noqa: E402
 from eval.aggregate import (  # noqa: E402
+    AggregateReport,
     aggregate,
     attach_telemetry,
     summarize_failure_counts,
@@ -75,6 +77,85 @@ def _dry_run(questions, runs) -> None:
     print(f"  rough estimate : "
           + (f"${est:.4f}" if est is not None else "unknown (model not in pricing table)"))
     print("  (order-of-magnitude only; assumes ~3.5k in / ~350 out tokens per case)")
+
+
+def _fabricated_count(report: AggregateReport) -> int:
+    return report.genuine_failures.get("fabricated_citations", 0)
+
+
+def _ablation_rows(control: AggregateReport, verifier: AggregateReport):
+    """Rows of (label, control_value, verifier_value, delta) for the comparison.
+
+    Pure so it can be unit-tested without running the pipeline.
+    """
+    def fmt(x):
+        return f"{x:.3f}" if x is not None else "n/a"
+
+    def delta(a, b):
+        if a is None or b is None:
+            return ""
+        d = b - a
+        return f"{d:+.3f}"
+
+    metrics = [
+        ("pass rate", control.pass_rate.mean, verifier.pass_rate.mean),
+        ("faithfulness", control.faithfulness.mean, verifier.faithfulness.mean),
+        ("citation coverage", control.citation_coverage.mean, verifier.citation_coverage.mean),
+        ("retrieval relevance", control.retrieval_relevance.mean, verifier.retrieval_relevance.mean),
+    ]
+    rows = [(label, fmt(c), fmt(v), delta(c, v)) for label, c, v in metrics]
+    # Integer count: fabricated citations flagged as genuine failures.
+    cf, vf = _fabricated_count(control), _fabricated_count(verifier)
+    rows.append(("fabricated citations", str(cf), str(vf), f"{vf - cf:+d}"))
+    return rows
+
+
+def _run_ablation(questions, runs):
+    """Run both arms on ONE shared generation per case, toggling only the verifier.
+
+    Generation (retrieval + LLM) is identical for both arms; the verifier is the
+    only variable, so any difference is attributable to it alone.
+    """
+    warmup()
+    reset_judge_usage()
+
+    control_runs, verifier_runs, responses = [], [], []
+    for run_no in range(1, runs + 1):
+        control, verifier = [], []
+        for i, q in enumerate(questions, start=1):
+            print(f"\rablation run {run_no}/{runs}  case {i}/{len(questions)}  {q.id}   ",
+                  end="", flush=True)
+            # One generation, verifier OFF — this is the control answer.
+            resp = answer_question(q.question, verify=False)
+            responses.append(resp)
+            control.append(evaluate_case(q, resp.answer, resp.sources))
+            # Apply the verifier to the SAME generated answer for the treatment arm.
+            _, marked = verify_citations(resp.answer, resp.sources)
+            verifier.append(evaluate_case(q, marked, resp.sources))
+        control_runs.append(control)
+        verifier_runs.append(verifier)
+    print()
+
+    control_report = attach_telemetry(aggregate(control_runs), responses)
+    verifier_report = attach_telemetry(aggregate(verifier_runs), responses)
+    return control_report, verifier_report, responses
+
+
+def _print_ablation(control, verifier) -> None:
+    print()
+    print("=" * 78)
+    print(f"ABLATION  ({control.questions} questions x {control.runs} run(s))")
+    print("single-pass (control)  vs.  single-pass + Verifier")
+    print("=" * 78)
+    print(f"  {'metric':<22}{'CONTROL':>10}{'+VERIFIER':>12}{'Δ':>10}")
+    print("  " + "-" * 54)
+    for label, c, v, d in _ablation_rows(control, verifier):
+        print(f"  {label:<22}{c:>10}{v:>12}{d:>10}")
+    print()
+    print("  Generation is identical across arms; only the Verifier differs.")
+    print("  The Verifier trades citation COVERAGE for citation INTEGRITY: fabricated")
+    print("  citations go to zero, but marked claims no longer count as cited, so")
+    print("  coverage falls. Faithfulness is ~unchanged (content is untouched).")
 
 
 def _print_summary(report, judge_cost, judge_usage, elapsed_s) -> None:
@@ -131,6 +212,10 @@ def main() -> None:
     parser.add_argument("--limit", type=int, help="cap the number of questions")
     parser.add_argument("--dry-run", action="store_true",
                         help="estimate cost and exit without calling anything")
+    parser.add_argument("--no-verifier", action="store_true",
+                        help="disable the citation verifier (single-pass control arm)")
+    parser.add_argument("--ablation", action="store_true",
+                        help="run both arms (control vs +verifier) on shared generation and compare")
     parser.add_argument("--out", help="explicit output path for the JSON results file")
     args = parser.parse_args()
 
@@ -145,16 +230,49 @@ def main() -> None:
     import time
 
     started = time.perf_counter()
+
+    # --- Ablation mode: control vs +verifier on one shared generation ---------
+    if args.ablation:
+        control_report, verifier_report, responses = _run_ablation(questions, args.runs)
+        _print_ablation(control_report, verifier_report)
+        judge_usage = get_judge_usage()
+        judge_cost = estimate_cost_usd(
+            settings.openai_llm_model, judge_usage["input_tokens"], judge_usage["output_tokens"])
+        elapsed = time.perf_counter() - started
+        print(f"\n  judge overhead ....... "
+              + (f"${judge_cost:.4f}" if judge_cost is not None else "unknown")
+              + f"  ({judge_usage['calls']} calls)   wall {elapsed:.1f}s")
+
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        out_path = Path(args.out) if args.out else RESULTS_DIR / f"ablation_{stamp}.json"
+        out_path.write_text(json.dumps({
+            "timestamp_utc": stamp,
+            "mode": "ablation",
+            "runs": args.runs,
+            "questions": len(questions),
+            "model": responses[0].model if responses else None,
+            "system_fingerprint": responses[0].system_fingerprint if responses else None,
+            "llm_seed": settings.llm_seed,
+            "top_k": settings.top_k,
+            "embed_model": settings.embed_model,
+            "control_report": control_report.model_dump(),
+            "verifier_report": verifier_report.model_dump(),
+        }, indent=2, default=str), encoding="utf-8")
+        print(f"\nablation results written to {out_path}")
+        return
+
     warmup()
     reset_judge_usage()
 
+    verify = not args.no_verifier
     all_runs, responses = [], []
     for run_no in range(1, args.runs + 1):
         results = []
         for i, q in enumerate(questions, start=1):
             print(f"\rrun {run_no}/{args.runs}  case {i}/{len(questions)}  {q.id}   ",
                   end="", flush=True)
-            resp = answer_question(q.question)
+            resp = answer_question(q.question, verify=verify)
             responses.append(resp)
             results.append(evaluate_case(q, resp.answer, resp.sources))
         all_runs.append(results)
@@ -178,6 +296,7 @@ def main() -> None:
         "timestamp_utc": stamp,
         "runs": args.runs,
         "questions": len(questions),
+        "verifier_enabled": verify,
         "model": responses[0].model if responses else None,
         "system_fingerprint": responses[0].system_fingerprint if responses else None,
         "llm_seed": settings.llm_seed,

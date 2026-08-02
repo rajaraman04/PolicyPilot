@@ -17,18 +17,17 @@ a misleading 0.0 or 1.0 — averaging an inapplicable metric would skew results.
 
 from __future__ import annotations
 
-import re
 from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from app.citations import CITATION_RE, parse_citations, split_sentences  # noqa: F401
 from app.schemas import Citation
 from eval.gold_set import Behavior, Category, GoldQuestion
 from eval.judge import SUPPORTED, UNSUPPORTED, judge_is_refusal, judge_sentence_support
 
-# Matches the citation format our prompt asks for: (nist_csf.pdf, p.8)
-# Tolerates "p.8", "p 8", "pp. 8".
-CITATION_RE = re.compile(r"\(\s*([\w\-.]+\.pdf)\s*,\s*pp?\.?\s*(\d+)\s*\)", re.IGNORECASE)
+# CITATION_RE / parse_citations / split_sentences are imported from app.citations
+# and re-exported here so existing eval.metrics.<name> references keep working.
 
 # Sentences shorter than this are treated as fragments, not factual claims.
 _MIN_SENTENCE_CHARS = 20
@@ -123,34 +122,6 @@ class CaseResult(BaseModel):
 # --------------------------------------------------------------------------
 # Text helpers
 # --------------------------------------------------------------------------
-
-
-def parse_citations(answer: str) -> list[tuple[str, int]]:
-    """Extract (document, page) pairs cited inline in an answer."""
-    return [(m.group(1), int(m.group(2))) for m in CITATION_RE.finditer(answer)]
-
-
-def split_sentences(text: str) -> list[str]:
-    """Split into sentences without breaking on the '.' inside '(file.pdf, p.8)'.
-
-    Citations are masked before splitting, then restored.
-    """
-    spans = list(CITATION_RE.finditer(text))
-    masked = text
-    for i, m in enumerate(reversed(spans)):
-        idx = len(spans) - 1 - i
-        masked = masked[: m.start()] + f"\x00C{idx}\x00" + masked[m.end() :]
-
-    parts = re.split(r"(?<=[.!?])\s+", masked)
-
-    out = []
-    for part in parts:
-        restored = part
-        for idx, m in enumerate(spans):
-            restored = restored.replace(f"\x00C{idx}\x00", m.group(0))
-        if restored.strip():
-            out.append(restored.strip())
-    return out
 
 
 def _is_factual_sentence(sentence: str) -> bool:
