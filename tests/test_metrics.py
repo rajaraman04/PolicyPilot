@@ -167,6 +167,37 @@ def test_faithfulness_excludes_non_claims_from_denominator():
     assert res.score == 1.0
 
 
+def test_derived_claims_count_as_grounded_and_are_surfaced():
+    """A DERIVED (validly synthesised) claim is faithful, not a failure, and
+    is reported separately from directly-supported claims."""
+    llm = VerdictLLM(default="SUPPORTED", overrides={2: "DERIVED"})
+    res = metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()], llm=llm)
+    assert res.score == 1.0  # supported + derived, no miss
+    assert res.unsupported_rate == 0.0
+    assert len(res.derived_claims) == 1
+    assert res.derived_rate == 0.5
+    assert res.denominator == 2
+
+
+def test_unsupported_still_counts_against_faithfulness_alongside_derived():
+    """Derived does not rescue an unsupported claim in the same answer."""
+    llm = VerdictLLM(default="DERIVED", overrides={2: "UNSUPPORTED"})
+    res = metrics.faithfulness(TWO_SENTENCE_ANSWER, [cite()], llm=llm)
+    assert res.score == 0.5  # 1 derived (grounded) / 2, the unsupported is a miss
+    assert len(res.unsupported_claims) == 1
+    assert len(res.derived_claims) == 1
+
+
+def test_derived_case_does_not_fail_but_unsupported_case_does():
+    """Case-level: a purely derived answer passes; an unsupported one fails."""
+    ans = "The framework defines the Core (nist_csf.pdf, p.8)."
+    derived_ok = metrics.evaluate_case(_q(), ans, [cite(page=8)], llm=VerdictLLM(default="DERIVED"))
+    assert derived_ok.passed, derived_ok.failures
+    hallucinated = metrics.evaluate_case(_q(), ans, [cite(page=8)], llm=VerdictLLM(default="UNSUPPORTED"))
+    assert not hallucinated.passed
+    assert FailureType.UNSUPPORTED_CLAIMS in hallucinated.failure_types()
+
+
 def test_faithfulness_not_applicable_for_short_refusal():
     res = metrics.faithfulness("I don't know.", [], llm=VerdictLLM())
     assert res.applicable is False

@@ -165,6 +165,8 @@ def _print_summary(report, judge_cost, judge_usage, elapsed_s) -> None:
     print("=" * 78)
     print(f"  pass rate ............ {report.pass_rate.render()}")
     print(f"  faithfulness ......... {report.faithfulness.render()}")
+    print(f"    of which derived ... {report.derived_rate.render()}  "
+          f"(grounded via synthesis, not stated)")
     print(f"  citation coverage .... {report.citation_coverage.render()}")
     print(f"  retrieval relevance .. {report.retrieval_relevance.render()}")
 

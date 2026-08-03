@@ -80,21 +80,30 @@ def format_context(citations: list[Citation]) -> str:
 
 
 SUPPORTED = "SUPPORTED"
+DERIVED = "DERIVED"
 UNSUPPORTED = "UNSUPPORTED"
 NOT_A_CLAIM = "NOT_A_CLAIM"
-_VALID_VERDICTS = {SUPPORTED, UNSUPPORTED, NOT_A_CLAIM}
+_VALID_VERDICTS = {SUPPORTED, DERIVED, UNSUPPORTED, NOT_A_CLAIM}
 
 VERDICT_JUDGE_SYSTEM = (
     "You are a strict grounding evaluator. You are given CONTEXT passages and a "
     "NUMBERED list of sentences taken from an ANSWER.\n\n"
     "For EACH numbered sentence return exactly one verdict:\n"
-    f"  {SUPPORTED}   - the CONTEXT states or directly entails the sentence.\n"
-    f"  {UNSUPPORTED} - the sentence asserts something the CONTEXT does not support. "
-    "Plausible-but-absent information is UNSUPPORTED.\n"
+    f"  {SUPPORTED}   - the CONTEXT directly states or paraphrases the sentence.\n"
+    f"  {DERIVED}     - the sentence is NOT stated verbatim, but follows by necessary "
+    "logical inference from facts that ARE in the CONTEXT (e.g. combining two stated "
+    "facts: if the context lists set A and set B, 'the only item in both' is DERIVED). "
+    "Use this ONLY when the conclusion MUST be true given the context.\n"
+    f"  {UNSUPPORTED} - the sentence asserts something the CONTEXT neither states nor "
+    "entails, contradicts it, or relies on any information not in the CONTEXT. "
+    "Plausible-but-absent facts, outside knowledge, and invented specifics (numbers, "
+    "dates, names) are UNSUPPORTED.\n"
     f"  {NOT_A_CLAIM} - the sentence makes no factual assertion (a preamble, heading, "
     "or pure hedging).\n\n"
     "Judge only against the CONTEXT. Your own world knowledge is irrelevant. Ignore "
-    "inline citation markers when judging.\n\n"
+    "inline citation markers when judging.\n"
+    "Be conservative with DERIVED: it is only for conclusions entailed by the context. "
+    "If you are unsure whether a sentence is DERIVED or UNSUPPORTED, choose UNSUPPORTED.\n\n"
     'Return JSON only: {"verdicts": [{"index": 1, "verdict": "SUPPORTED"}, ...]}\n'
     "You MUST return exactly one entry per numbered sentence, using the same indices."
 )
