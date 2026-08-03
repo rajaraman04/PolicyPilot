@@ -5,6 +5,7 @@ eval harness share one retrieval path. Queries are embedded with the same
 factory used at ingest time, so query and chunk vectors are comparable.
 """
 
+import math
 import time
 
 import chromadb
@@ -80,6 +81,35 @@ class Retriever:
             "retrieval_ms": round((t2 - t1) * 1000, 1),
         }
         return self._to_citations(result), timings
+
+    def retrieve_multi(
+        self, queries: list[str], total_k: int | None = None
+    ) -> tuple[list[Citation], dict[str, float]]:
+        """Retrieve for several sub-queries under a SHARED budget, then merge.
+
+        Each sub-query gets ceil(total_k / n) chunks, so total context stays
+        ~total_k while every sub-query (hence every document) is represented.
+        Results are merged and deduped by (document, page), first-seen order
+        preserved. Timings are summed across sub-queries.
+        """
+        total_k = total_k or self.top_k
+        queries = [q for q in queries if q and q.strip()] or [""]
+        per_query = max(1, math.ceil(total_k / len(queries)))
+
+        merged: dict[tuple[str, int], Citation] = {}
+        embed_ms = retrieval_ms = 0.0
+        for q in queries:
+            cites, timings = self.retrieve_timed(q, top_k=per_query)
+            embed_ms += timings["embed_ms"]
+            retrieval_ms += timings["retrieval_ms"]
+            for c in cites:
+                key = (c.document.lower(), c.page)
+                merged.setdefault(key, c)
+
+        return list(merged.values()), {
+            "embed_ms": round(embed_ms, 1),
+            "retrieval_ms": round(retrieval_ms, 1),
+        }
 
     @staticmethod
     def _to_citations(result: dict) -> list[Citation]:

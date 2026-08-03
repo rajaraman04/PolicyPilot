@@ -66,6 +66,9 @@ class AggregateReport(BaseModel):
 
     pass_rate: MetricStat = Field(default_factory=MetricStat)
     faithfulness: MetricStat = Field(default_factory=MetricStat)
+    # Fraction of grounded claims that were validly synthesised rather than
+    # directly stated — reported alongside faithfulness, not folded away.
+    derived_rate: MetricStat = Field(default_factory=MetricStat)
     citation_coverage: MetricStat = Field(default_factory=MetricStat)
     retrieval_relevance: MetricStat = Field(default_factory=MetricStat)
 
@@ -106,6 +109,9 @@ def aggregate(runs: list[list[CaseResult]]) -> AggregateReport:
     def _faith(c):
         return c.faithfulness.score if c.faithfulness and c.faithfulness.applicable else None
 
+    def _der(c):
+        return c.faithfulness.derived_rate if c.faithfulness and c.faithfulness.applicable else None
+
     def _cov(c):
         return (c.citation_coverage.score
                 if c.citation_coverage and c.citation_coverage.applicable else None)
@@ -116,6 +122,7 @@ def aggregate(runs: list[list[CaseResult]]) -> AggregateReport:
 
     pass_rates = [sum(c.passed for c in run) / len(run) for run in runs if run]
     faith = [m for run in runs if run for m in [_run_mean(run, _faith)] if m is not None]
+    der = [m for run in runs if run for m in [_run_mean(run, _der)] if m is not None]
     cov = [m for run in runs if run for m in [_run_mean(run, _cov)] if m is not None]
     rel = [m for run in runs if run for m in [_run_mean(run, _rel)] if m is not None]
 
@@ -155,6 +162,7 @@ def aggregate(runs: list[list[CaseResult]]) -> AggregateReport:
         questions=len(by_id),
         pass_rate=MetricStat.from_values(pass_rates),
         faithfulness=MetricStat.from_values(faith),
+        derived_rate=MetricStat.from_values(der),
         citation_coverage=MetricStat.from_values(cov),
         retrieval_relevance=MetricStat.from_values(rel),
         genuine_failures=dict(genuine.most_common()),

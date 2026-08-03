@@ -80,17 +80,26 @@ def format_context(citations: list[Citation]) -> str:
 
 
 SUPPORTED = "SUPPORTED"
+DERIVED = "DERIVED"
 UNSUPPORTED = "UNSUPPORTED"
 NOT_A_CLAIM = "NOT_A_CLAIM"
-_VALID_VERDICTS = {SUPPORTED, UNSUPPORTED, NOT_A_CLAIM}
+_VALID_VERDICTS = {SUPPORTED, DERIVED, UNSUPPORTED, NOT_A_CLAIM}
 
 VERDICT_JUDGE_SYSTEM = (
     "You are a strict grounding evaluator. You are given CONTEXT passages and a "
     "NUMBERED list of sentences taken from an ANSWER.\n\n"
     "For EACH numbered sentence return exactly one verdict:\n"
-    f"  {SUPPORTED}   - the CONTEXT states or directly entails the sentence.\n"
-    f"  {UNSUPPORTED} - the sentence asserts something the CONTEXT does not support. "
-    "Plausible-but-absent information is UNSUPPORTED.\n"
+    f"  {SUPPORTED}   - the CONTEXT states, paraphrases, or directly entails the "
+    "sentence. A single passage backing it is enough.\n"
+    f"  {DERIVED}     - the sentence is not backed by any single passage, but follows "
+    "by necessary logical inference from combining facts stated across MULTIPLE "
+    "passages (e.g. passage A lists one set and passage B another, and the sentence "
+    "states their overlap or difference). Use DERIVED only when the conclusion is "
+    "necessarily true given those passages; an invented or merely plausible detail is "
+    "UNSUPPORTED, not DERIVED.\n"
+    f"  {UNSUPPORTED} - the sentence contradicts the CONTEXT or is not entailed by it. "
+    "Plausible-but-absent information, outside knowledge, and invented specifics "
+    "(numbers, dates, names) are UNSUPPORTED.\n"
     f"  {NOT_A_CLAIM} - the sentence makes no factual assertion (a preamble, heading, "
     "or pure hedging).\n\n"
     "Judge only against the CONTEXT. Your own world knowledge is irrelevant. Ignore "

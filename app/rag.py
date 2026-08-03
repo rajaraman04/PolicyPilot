@@ -13,7 +13,9 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.config import settings
 from app.llm import get_llm
+from app.planner import plan_query, warmup_planner
 from app.pricing import estimate_cost_usd
 from app.retriever import Retriever
 from app.schemas import AnswerResponse, Citation, LatencyBreakdown, TokenUsage
@@ -75,6 +77,7 @@ def warmup() -> None:
     _retriever.warmup()
     try:
         _get_llm()
+        warmup_planner()
     except ValueError as exc:  # missing API key — embeddings still warmed
         logger.warning("LLM warm-up skipped (%s).", exc)
 
@@ -104,7 +107,9 @@ def _dedupe_sources(citations: list[Citation]) -> list[Citation]:
 
 def _log_breakdown(question: str, b: LatencyBreakdown) -> None:
     logger.info(
-        "query latency breakdown | embed=%.1fms retrieval=%.1fms llm=%.1fms total=%.1fms | q=%r",
+        "query latency breakdown | plan=%.1fms embed=%.1fms retrieval=%.1fms "
+        "llm=%.1fms total=%.1fms | q=%r",
+        b.plan_ms,
         b.embed_ms,
         b.retrieval_ms,
         b.llm_ms,
@@ -114,21 +119,33 @@ def _log_breakdown(question: str, b: LatencyBreakdown) -> None:
 
 
 def answer_question(
-    question: str, top_k: int | None = None, verify: bool = True
+    question: str, top_k: int | None = None, verify: bool = True, plan: bool = False
 ) -> AnswerResponse:
     """Retrieve evidence and produce a grounded, cited answer.
 
-    Times each stage (embedding, Chroma retrieval, LLM call) separately and
-    returns the breakdown so callers can see which stage dominates latency.
+    Times each stage (planning, embedding, Chroma retrieval, LLM call) separately
+    and returns the breakdown so callers can see which stage dominates latency.
 
-    When ``verify`` is True (default), the Verifier checks every citation against
-    what was actually retrieved and marks any fabricated citation as [unverified].
-    Set verify=False to reproduce the pre-verifier single-pass baseline (the
-    control arm of the ablation).
+    When ``plan`` is True, the Planner decomposes the question into sub-queries and
+    retrieval runs per sub-query under a shared budget (balanced cross-document
+    evidence). When ``verify`` is True (default), the Verifier marks any fabricated
+    citation as [unverified]. Both default to the single-pass baseline when off,
+    so the harness can ablate each independently.
     """
     start = time.perf_counter()
 
-    citations, timings = _retriever.retrieve_timed(question, top_k=top_k)
+    plan_ms = 0.0
+    plan_usage: TokenUsage | None = None
+    planned_queries: list[str] | None = None
+
+    if plan:
+        t_plan = time.perf_counter()
+        planned_queries, plan_usage = plan_query(question)
+        plan_ms = (time.perf_counter() - t_plan) * 1000
+        citations, timings = _retriever.retrieve_multi(planned_queries, total_k=top_k)
+    else:
+        citations, timings = _retriever.retrieve_timed(question, top_k=top_k)
+
     llm_ms = 0.0
     usage: TokenUsage | None = None
     model_name: str | None = None
@@ -167,12 +184,23 @@ def answer_question(
 
     total_ms = (time.perf_counter() - start) * 1000
     breakdown = LatencyBreakdown(
+        plan_ms=round(plan_ms, 1),
         embed_ms=timings["embed_ms"],
         retrieval_ms=timings["retrieval_ms"],
         llm_ms=round(llm_ms, 1),
         total_ms=round(total_ms, 1),
     )
     _log_breakdown(question, breakdown)
+
+    # Fold the Planner's token usage into product usage/cost.
+    if plan_usage:
+        if usage:
+            usage = TokenUsage(
+                input_tokens=usage.input_tokens + plan_usage.input_tokens,
+                output_tokens=usage.output_tokens + plan_usage.output_tokens,
+            )
+        else:
+            usage = plan_usage
 
     # Verify citations against what was actually retrieved. Fabricated citations
     # are marked [unverified] in the returned answer (deterministic, no LLM call).
@@ -186,10 +214,14 @@ def answer_question(
                 [f"({c.document}, p.{c.page})" for c in verification.fabricated],
             )
 
+    # Planner may consume tokens even on the no-evidence path (no generation),
+    # so fall back to the configured model name for costing when needed.
     cost = (
-        estimate_cost_usd(model_name or "", usage.input_tokens, usage.output_tokens)
+        estimate_cost_usd(
+            model_name or settings.openai_llm_model, usage.input_tokens, usage.output_tokens
+        )
         if usage
-        else 0.0  # no LLM call was made (no-evidence path)
+        else 0.0  # nothing called the LLM (no-evidence path, planning off)
     )
 
     return AnswerResponse(
@@ -203,4 +235,5 @@ def answer_question(
         model=model_name,
         system_fingerprint=fingerprint,
         verification=verification,
+        planned_queries=planned_queries,
     )

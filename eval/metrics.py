@@ -17,6 +17,7 @@ a misleading 0.0 or 1.0 — averaging an inapplicable metric would skew results.
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -24,7 +25,7 @@ from pydantic import BaseModel, Field
 from app.citations import CITATION_RE, parse_citations, split_sentences  # noqa: F401
 from app.schemas import Citation
 from eval.gold_set import Behavior, Category, GoldQuestion
-from eval.judge import SUPPORTED, UNSUPPORTED, judge_is_refusal, judge_sentence_support
+from eval.judge import DERIVED, SUPPORTED, UNSUPPORTED, judge_is_refusal, judge_sentence_support
 
 # CITATION_RE / parse_citations / split_sentences are imported from app.citations
 # and re-exported here so existing eval.metrics.<name> references keep working.
@@ -44,20 +45,28 @@ _REFUSAL_FAST_PATH = "don't have enough information"
 
 class FaithfulnessResult(BaseModel):
     applicable: bool = True
-    score: float = 1.0  # fraction of judged sentences supported by context
+    # Fraction of judged claims that are grounded — directly stated (supported)
+    # OR entailed by combining stated facts (derived). Both count as faithful.
+    score: float = 1.0
     supported_claims: list[str] = Field(default_factory=list)
+    derived_claims: list[str] = Field(default_factory=list)  # entailed by synthesis
     unsupported_claims: list[str] = Field(default_factory=list)
     non_claims: list[str] = Field(default_factory=list)
 
     # Sentences our deterministic splitter produced. Identical for identical
     # answer text, regardless of the judge — the stability anchor.
     sentences_considered: int = 0
-    # supported + unsupported (excludes NOT_A_CLAIM).
+    # supported + derived + unsupported (excludes NOT_A_CLAIM).
     denominator: int = 0
 
     @property
     def unsupported_rate(self) -> float:
         return round(1.0 - self.score, 4)
+
+    @property
+    def derived_rate(self) -> float:
+        """Fraction of judged claims that were grounded via synthesis, not stated."""
+        return round(len(self.derived_claims) / self.denominator, 4) if self.denominator else 0.0
 
 
 class CitationCoverageResult(BaseModel):
@@ -135,10 +144,55 @@ def find_excluded(answer: str, excludes: list[str]) -> list[str]:
     return [term for term in excludes if term.lower() in low]
 
 
+# Inflectional endings only. Stripping these unifies plural/verb variants
+# (inform/informs/informing, tier/tiers) without touching word roots. It does
+# NOT handle derivational cross-POS pairs (center/central, decide/decision) —
+# those cannot be unified by suffix-stripping without collapsing unrelated words,
+# so they are deliberately left as a labeling decision, not a matcher change.
+_STEM_SUFFIXES = ("ingly", "iedly", "edly", "ing", "ied", "ies", "ed", "ly", "es", "s")
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _stem(word: str) -> str:
+    """Strip one inflectional suffix, guarding against mangling short roots."""
+    w = word.lower()
+    for suf in _STEM_SUFFIXES:
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            return w[: -len(suf)]
+    return w
+
+
+def _stem_tokens(text: str) -> list[str]:
+    return [_stem(t) for t in _WORD_RE.findall(text.lower())]
+
+
+def _term_present(term: str, answer_lower: str, answer_stems: list[str]) -> bool:
+    """A term is present if it matches as an exact substring (original behaviour,
+    so nothing that matched before regresses) OR as a stemmed, CONTIGUOUS token
+    run (so morphological variants match). Contiguity prevents cross-phrase false
+    positives like 'risk tolerance' matching 'tolerance for risk'.
+    """
+    if term.lower() in answer_lower:
+        return True
+    term_stems = _stem_tokens(term)
+    if not term_stems:
+        return True
+    n = len(term_stems)
+    for i in range(len(answer_stems) - n + 1):
+        if answer_stems[i : i + n] == term_stems:
+            return True
+    return False
+
+
 def find_missing_terms(answer: str, expected: list[str]) -> list[str]:
-    """Return expected terms absent from the answer (case-insensitive)."""
-    low = answer.lower()
-    return [term for term in expected if term.lower() not in low]
+    """Return expected terms absent from the answer.
+
+    Matching is case-insensitive and tolerant of inflectional variants (a term
+    'informs' matches an answer saying 'inform'); see _term_present.
+    """
+    answer_lower = answer.lower()
+    answer_stems = _stem_tokens(answer)
+    return [term for term in expected if not _term_present(term, answer_lower, answer_stems)]
 
 
 def is_refusal(answer: str, llm=None, use_llm: bool = True) -> bool:
@@ -172,16 +226,18 @@ def faithfulness(answer: str, citations: list[Citation], llm=None) -> Faithfulne
 
     verdicts = judge_sentence_support(sentences, citations, llm=llm)
 
-    supported, unsupported, non_claims = [], [], []
+    supported, derived, unsupported, non_claims = [], [], [], []
     for sentence, verdict in zip(sentences, verdicts):
         if verdict == SUPPORTED:
             supported.append(sentence)
+        elif verdict == DERIVED:
+            derived.append(sentence)
         elif verdict == UNSUPPORTED:
             unsupported.append(sentence)
         else:
             non_claims.append(sentence)
 
-    denominator = len(supported) + len(unsupported)
+    denominator = len(supported) + len(derived) + len(unsupported)
     if denominator == 0:
         # Every sentence was a preamble/heading — no factual content to score.
         return FaithfulnessResult(
@@ -190,9 +246,12 @@ def faithfulness(answer: str, citations: list[Citation], llm=None) -> Faithfulne
             sentences_considered=len(sentences),
         )
 
+    # Grounded = directly stated OR validly derived; only UNSUPPORTED is a miss.
+    grounded = len(supported) + len(derived)
     return FaithfulnessResult(
-        score=round(len(supported) / denominator, 4),
+        score=round(grounded / denominator, 4),
         supported_claims=supported,
+        derived_claims=derived,
         unsupported_claims=unsupported,
         non_claims=non_claims,
         sentences_considered=len(sentences),
