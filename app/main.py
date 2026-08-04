@@ -9,8 +9,9 @@ import logging
 from fastapi import FastAPI, HTTPException
 
 from app.db import init_db
-from app.rag import answer_question, warmup
-from app.schemas import AnswerResponse, QueryRequest
+from app.graph import answer_with_decision
+from app.rag import warmup
+from app.schemas import QueryRequest, QueryResponse
 
 app = FastAPI(title="PolicyPilot AI", version="0.1.0")
 logger = logging.getLogger("uvicorn")
@@ -39,18 +40,20 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/query", response_model=AnswerResponse)
-def query(req: QueryRequest) -> AnswerResponse:
-    """Answer a policy question via single-pass RAG, grounded in retrieved chunks.
+@app.post("/query", response_model=QueryResponse)
+def query(req: QueryRequest) -> QueryResponse:
+    """Answer a policy question via the agentic flow (Planner -> Retriever ->
+    Verifier/Decision).
 
-    The answer is constrained to the retrieved context and cites its sources
-    (filename + page). Returns a no-evidence message if nothing relevant is found.
+    Returns an Approved / Denied / Needs-More-Info decision with a confidence
+    score and citations. The answer is constrained to the retrieved context;
+    fabricated citations are marked [unverified].
     """
     if not req.question or not req.question.strip():
         raise HTTPException(status_code=400, detail="Question must not be empty.")
 
     try:
-        return answer_question(req.question)
+        return answer_with_decision(req.question)
     except ValueError as exc:
         # e.g. missing API key for the configured provider
         raise HTTPException(status_code=503, detail=str(exc)) from exc
