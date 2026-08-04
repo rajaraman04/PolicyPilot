@@ -1,17 +1,23 @@
 """Node 3: Verifier / Decision.
 
-Checks that every claim in the drafted answer is grounded in the retrieved
-text, then emits the Approved / Denied / Needs-More-Info decision and a
-confidence score. Never invents citations or unsupported facts.
+Verifies the answer's citations against what was retrieved (marking any
+fabricated citation [unverified]), then derives the trust/answerability decision
+and a confidence score. Never invents citations or unsupported facts.
 """
 
-from app.graph import GraphState
+from __future__ import annotations
+
+from app.decision import decide
+from app.verifier import verify_citations
 
 
-def verifier_node(state: GraphState) -> GraphState:
-    """Verify grounding and produce the final decision.
-
-    TODO: compare drafted claims against state["citations"]; set
-    state["decision"], state["answer"], state["confidence"].
-    """
-    raise NotImplementedError("Verifier node pending.")
+def verifier_node(state: dict) -> dict:
+    citations = state.get("citations", [])
+    verification, marked = verify_citations(state["answer"], citations)
+    decision, confidence = decide(marked, citations, verification)
+    return {
+        "answer": marked,
+        "verification": verification,
+        "decision": decision,
+        "confidence": confidence,
+    }

@@ -105,6 +105,34 @@ def _dedupe_sources(citations: list[Citation]) -> list[Citation]:
     return sources
 
 
+def generate_answer(
+    question: str, citations: list[Citation]
+) -> tuple[str, TokenUsage | None, str | None, str | None]:
+    """Generate a grounded, cited answer from retrieved context.
+
+    Returns (answer_text, usage, model_name, system_fingerprint). Shared by
+    answer_question and the graph's Retriever node so both generate identically.
+    """
+    context = _format_context(citations)
+    response = _get_llm().invoke(
+        [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=f"Context:\n{context}\n\nQuestion: {question}"),
+        ]
+    )
+    answer_text = response.content if isinstance(response.content, str) else str(response.content)
+
+    usage = None
+    raw = getattr(response, "usage_metadata", None)
+    if raw:
+        usage = TokenUsage(
+            input_tokens=raw.get("input_tokens", 0),
+            output_tokens=raw.get("output_tokens", 0),
+        )
+    meta = getattr(response, "response_metadata", None) or {}
+    return answer_text.strip(), usage, meta.get("model_name") or meta.get("model"), meta.get("system_fingerprint")
+
+
 def _log_breakdown(question: str, b: LatencyBreakdown) -> None:
     logger.info(
         "query latency breakdown | plan=%.1fms embed=%.1fms retrieval=%.1fms "
@@ -156,31 +184,12 @@ def answer_question(
         answer_text = NO_EVIDENCE_MSG
         sources: list[Citation] = []
     else:
-        context = _format_context(citations)
         # Time the whole LLM stage (client fetch + call). After warm-up the
         # client is already built, so this is essentially the API round-trip.
         t_llm = time.perf_counter()
-        llm = _get_llm()
-        response = llm.invoke(
-            [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=f"Context:\n{context}\n\nQuestion: {question}"),
-            ]
-        )
+        answer_text, usage, model_name, fingerprint = generate_answer(question, citations)
         llm_ms = (time.perf_counter() - t_llm) * 1000
-        answer_text = response.content if isinstance(response.content, str) else str(response.content)
-        answer_text = answer_text.strip()
         sources = _dedupe_sources(citations)
-
-        raw_usage = getattr(response, "usage_metadata", None)
-        if raw_usage:
-            usage = TokenUsage(
-                input_tokens=raw_usage.get("input_tokens", 0),
-                output_tokens=raw_usage.get("output_tokens", 0),
-            )
-        meta = getattr(response, "response_metadata", None) or {}
-        model_name = meta.get("model_name") or meta.get("model")
-        fingerprint = meta.get("system_fingerprint")
 
     total_ms = (time.perf_counter() - start) * 1000
     breakdown = LatencyBreakdown(

@@ -1,18 +1,25 @@
 """Node 2: Retriever.
 
-Pulls the top-k relevant chunks from ChromaDB, attaching citations
-(document name + page) to state.
+Retrieves evidence for the planned sub-queries (shared budget) and generates a
+grounded, cited answer. Falls back to the no-evidence message when nothing is
+retrieved (so the LLM isn't called and the query stays free).
 """
 
-from app.graph import GraphState
-from app.retriever import Retriever
+from __future__ import annotations
 
-_retriever = Retriever()
+from app.rag import NO_EVIDENCE_MSG, _retriever, generate_answer
 
 
-def retriever_node(state: GraphState) -> GraphState:
-    """Retrieve evidence chunks for the planned query.
+def retriever_node(state: dict) -> dict:
+    citations, _timings = _retriever.retrieve_multi(state["planned_queries"])
+    if not citations:
+        return {"citations": [], "answer": NO_EVIDENCE_MSG, "gen_usage": None}
 
-    TODO: use state["plan"]/state["question"] to fetch citations via Retriever.
-    """
-    raise NotImplementedError("Retriever node pending.")
+    answer, usage, model, fingerprint = generate_answer(state["question"], citations)
+    return {
+        "citations": citations,
+        "answer": answer,
+        "gen_usage": usage,
+        "model": model,
+        "fingerprint": fingerprint,
+    }

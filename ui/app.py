@@ -28,19 +28,30 @@ if st.button("Ask") and question.strip():
         except Exception as exc:  # noqa: BLE001 - surface any error to the user
             st.error(f"Request failed: {exc}")
         else:
+            decision = data.get("decision", "—")
+            confidence = data.get("confidence")
+            badge = {"Approved": "✅", "Denied": "⛔", "Needs-More-Info": "❓"}.get(decision, "")
+            st.subheader(f"{badge} {decision}")
+            if confidence is not None:
+                st.progress(min(max(confidence, 0.0), 1.0), text=f"Confidence: {confidence:.0%}")
+
             st.subheader("Answer")
             st.write(data.get("answer", ""))
 
+            cols = st.columns(2)
             latency = data.get("latency_ms")
             if latency is not None:
-                st.caption(f"Latency: {latency:.0f} ms")
+                cols[0].caption(f"Latency: {latency:.0f} ms")
+            cost = data.get("cost_usd")
+            if cost is not None:
+                cols[1].caption(f"Est. cost: ${cost:.5f}")
 
-            sources = data.get("sources", [])
+            citations = data.get("citations", [])
             st.subheader("Sources")
-            if sources:
-                for s in sources:
-                    st.markdown(f"**{s['document']}, p.{s['page']}**")
-                    if s.get("snippet"):
-                        st.write(s["snippet"])
+            if citations:
+                for c in citations:
+                    st.markdown(f"**{c['document']}, p.{c['page']}**")
+                    if c.get("snippet"):
+                        st.write(c["snippet"])
             else:
-                st.write("No sources returned.")
+                st.write("No sources cited.")
