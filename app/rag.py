@@ -13,6 +13,7 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.citations import parse_citations
 from app.config import settings
 from app.llm import get_llm
 from app.planner import plan_query, warmup_planner
@@ -105,18 +106,32 @@ def _dedupe_sources(citations: list[Citation]) -> list[Citation]:
     return sources
 
 
-def generate_answer(
-    question: str, citations: list[Citation]
-) -> tuple[str, TokenUsage | None, str | None, str | None]:
-    """Generate a grounded, cited answer from retrieved context.
+# Appended to the system prompt on a retry when the first answer omitted citations.
+_CITE_RETRY_REMINDER = (
+    "\n\nYour previous attempt omitted citations. This is not allowed: EVERY "
+    "factual statement MUST end with an inline (filename, p.PAGE) citation taken "
+    "only from the context above. Do not produce a single uncited claim."
+)
 
-    Returns (answer_text, usage, model_name, system_fingerprint). Shared by
-    answer_question and the graph's Retriever node so both generate identically.
-    """
+
+def _merge_usage(a: TokenUsage | None, b: TokenUsage | None) -> TokenUsage | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return TokenUsage(
+        input_tokens=a.input_tokens + b.input_tokens,
+        output_tokens=a.output_tokens + b.output_tokens,
+    )
+
+
+def _generate_once(
+    question: str, citations: list[Citation], reminder: str = "", llm=None
+) -> tuple[str, TokenUsage | None, str | None, str | None]:
     context = _format_context(citations)
-    response = _get_llm().invoke(
+    response = (llm or _get_llm()).invoke(
         [
-            SystemMessage(content=SYSTEM_PROMPT),
+            SystemMessage(content=SYSTEM_PROMPT + reminder),
             HumanMessage(content=f"Context:\n{context}\n\nQuestion: {question}"),
         ]
     )
@@ -131,6 +146,32 @@ def generate_answer(
         )
     meta = getattr(response, "response_metadata", None) or {}
     return answer_text.strip(), usage, meta.get("model_name") or meta.get("model"), meta.get("system_fingerprint")
+
+
+def generate_answer(
+    question: str, citations: list[Citation], retry_uncited: bool = False, llm=None
+) -> tuple[str, TokenUsage | None, str | None, str | None]:
+    """Generate a grounded, cited answer from retrieved context.
+
+    Returns (answer_text, usage, model_name, system_fingerprint). Shared by
+    answer_question and the graph's Retriever node so both generate identically.
+
+    With ``retry_uncited`` (product path), if the model produces an answer with no
+    inline citations despite context being available, regenerate once with a
+    stronger instruction — so a correct-but-unformatted answer isn't penalised by
+    the downstream decision. Off by default so the eval path is unchanged.
+    """
+    answer, usage, model, fingerprint = _generate_once(question, citations, llm=llm)
+
+    if retry_uncited and citations and not parse_citations(answer):
+        retry_answer, retry_usage, retry_model, retry_fp = _generate_once(
+            question, citations, reminder=_CITE_RETRY_REMINDER, llm=llm
+        )
+        usage = _merge_usage(usage, retry_usage)
+        if parse_citations(retry_answer):
+            return retry_answer, usage, retry_model or model, retry_fp or fingerprint
+
+    return answer, usage, model, fingerprint
 
 
 def _log_breakdown(question: str, b: LatencyBreakdown) -> None:

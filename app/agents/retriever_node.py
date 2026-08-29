@@ -15,7 +15,9 @@ def retriever_node(state: dict) -> dict:
     if not citations:
         return {"citations": [], "answer": NO_EVIDENCE_MSG, "gen_usage": None}
 
-    answer, usage, model, fingerprint = generate_answer(state["question"], citations)
+    answer, usage, model, fingerprint = generate_answer(
+        state["question"], citations, retry_uncited=True
+    )
     return {
         "citations": citations,
         "answer": answer,
