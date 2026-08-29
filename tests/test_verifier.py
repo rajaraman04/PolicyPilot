@@ -67,6 +67,18 @@ def test_accepts_tuple_pairs_as_retrieved():
     assert result.verified is True
 
 
+def test_fabricated_citation_inside_a_group_is_caught():
+    """Regression: a fabricated citation grouped with a valid one — the verifier
+    must flag only the fabricated page, not miss the whole group."""
+    ans = "Tiers are defined (nist_csf.pdf, p.4; nist_csf.pdf, p.31)."
+    result, marked = verify_citations(ans, [cite(page=4)])  # only p.4 retrieved
+    assert [(c.document, c.page) for c in result.passed] == [("nist_csf.pdf", 4)]
+    assert [(c.document, c.page) for c in result.fabricated] == [("nist_csf.pdf", 31)]
+    assert result.verified is False
+    assert "p.4" in marked and "p.31" not in marked
+    assert UNVERIFIED_TAG in marked
+
+
 def test_repeated_fabricated_citation_all_occurrences_marked():
     ans = "First (nist_csf.pdf, p.99). Second (nist_csf.pdf, p.99)."
     result, marked = verify_citations(ans, [cite(page=8)])
