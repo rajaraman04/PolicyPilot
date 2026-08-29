@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import re
 
-# Matches the citation format our prompt asks for: (nist_csf.pdf, p.8)
-# Tolerates "p.8", "p 8", "pp. 8".
-CITATION_RE = re.compile(r"\(\s*([\w\-.]+\.pdf)\s*,\s*pp?\.?\s*(\d+)\s*\)", re.IGNORECASE)
+# Matches the citation format our prompt asks for: (nist_csf.pdf, p.8).
+# Parens are optional so that citations GROUPED in one parenthesis — e.g.
+# "(nist_csf.pdf, p.4; nist_csf.pdf, p.31)" — are each matched individually,
+# rather than the whole group parsing as zero citations. Tolerates "p.8",
+# "p 8", "pp. 8".
+CITATION_RE = re.compile(r"\(?\s*([\w\-.]+\.pdf)\s*,\s*pp?\.?\s*(\d+)\s*\)?", re.IGNORECASE)
 
 
 def parse_citations(answer: str) -> list[tuple[str, int]]:
