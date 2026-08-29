@@ -2,10 +2,13 @@
 
 Trust/answerability semantics (deterministic — no LLM call, no eval-judge):
 
-  NEEDS_MORE_INFO : the system declined (no/insufficient evidence, ambiguous).
-  DENIED          : an answer was produced but nothing in it is grounded — it
-                    carries no valid citation (all were fabricated & stripped, or
-                    it never cited). We refuse to stand behind it.
+  NEEDS_MORE_INFO : the system declined (no/insufficient evidence, ambiguous), OR
+                    it answered but attributed nothing (no citations at all), so
+                    grounding can't be confirmed — we don't reject it, we ask for
+                    more/clearer input.
+  DENIED          : the answer cited sources, but every citation was fabricated
+                    (not in the retrieved set). It actively misattributes — we
+                    refuse to stand behind it.
   APPROVED        : a grounded, cited answer the system stands behind. Confidence
                     is reduced when some citations were fabricated or coverage is low.
 
@@ -60,8 +63,14 @@ def decide(
 
     confidence = round((citation_coverage(answer) + verification_pass_rate(verification)) / 2, 2)
 
-    # An answer with no valid citation left is ungrounded — we won't stand behind it.
-    if not parse_citations(answer):
+    # Cited sources, but every one was fabricated (and stripped) → actively
+    # misattributes. This is the only "Denied" case.
+    if verification is not None and verification.fabricated and not verification.passed:
         return Decision.DENIED, confidence
+
+    # Produced an answer but cited nothing at all → can't confirm grounding.
+    # Not a rejection (the content may be fine), just unverifiable → ask for more.
+    if not parse_citations(answer):
+        return Decision.NEEDS_MORE_INFO, confidence
 
     return Decision.APPROVED, confidence

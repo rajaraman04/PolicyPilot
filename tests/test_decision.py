@@ -59,8 +59,8 @@ def test_partial_fabrication_lowers_confidence_but_stays_approved():
 # --- ungrounded answer -> DENIED -------------------------------------------
 
 
-def test_answer_with_no_valid_citation_is_denied():
-    """All citations stripped by the verifier -> nothing grounded -> DENIED."""
+def test_all_citations_fabricated_is_denied():
+    """Cited sources, but every citation was fabricated -> actively misattributes -> DENIED."""
     ans = "The maximum fine is large [unverified — citation not in retrieved sources]."
     decision, conf = decide(ans, [_cite(page=8)],
                             _partly(passed=[], fabricated=[("nist_csf.pdf", 99)]))
@@ -68,11 +68,12 @@ def test_answer_with_no_valid_citation_is_denied():
     assert conf < 0.5
 
 
-def test_uncited_answer_is_denied():
-    """Model produced a substantive answer but never cited -> DENIED."""
+def test_uncited_answer_is_needs_more_info_not_denied():
+    """A correct-but-uncited answer must not be rejected as DENIED; grounding just
+    can't be confirmed -> NEEDS_MORE_INFO."""
     ans = "The CSF has six core functions that organizations should implement."
     decision, conf = decide(ans, [_cite(page=8)], VerificationResult(verified=True))
-    assert decision == Decision.DENIED
+    assert decision == Decision.NEEDS_MORE_INFO
 
 
 # --- component helpers ------------------------------------------------------
